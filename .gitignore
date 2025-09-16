@@ -1,6 +1,9 @@
 # Ignore everything by default
 *
 
+# But keep folders
+!*/
+
 # Keep only these files/folders
 !.gitignore
 !pom.xml
