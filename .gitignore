@@ -7,5 +7,5 @@
 # Keep only these files/folders
 !.gitignore
 !pom.xml
-!assignment0.md
+!*.md
 !src/**
