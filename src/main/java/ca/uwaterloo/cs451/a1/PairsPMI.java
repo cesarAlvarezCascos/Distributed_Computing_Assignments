@@ -1,9 +1,8 @@
 package ca.uwaterloo.cs451.a1;
 
 import io.bespin.java.util.Tokenizer;
-import org.apache.hadoop.conf.Configuration; //
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
-import org.apache.hadoop.fs.FSDataInputStream; //
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
@@ -28,21 +27,14 @@ import tl.lin.data.pair.PairOfStrings;
 import org.apache.hadoop.util.LineReader;
 import org.apache.hadoop.fs.FileStatus;
 
-import org.apache.hadoop.fs.RemoteIterator; //
-import org.apache.hadoop.fs.LocatedFileStatus; //
+import java.util.Map;
+import java.util.HashMap; 
+import java.util.Set;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.ArrayList;
 
-
-import java.io.BufferedReader; //
-import java.io.InputStreamReader; //
-import java.net.URI; //
-
-import java.util.Map; //
-import java.util.HashMap; //
-import java.util.Set; //
-import java.util.HashSet; //
-import java.util.List; //
-import java.util.ArrayList; //
-import java.util.LinkedHashSet; //
 
 import java.io.IOException;
 import java.util.Iterator;
@@ -244,7 +236,7 @@ public class PairsPMI extends Configured implements Tool {
       double pmi = Math.log10(numerator / denominator);
 
       // Output: (PMI,count)
-      String value1 = String.format("%f\t%d", pmi, sum);
+      String value1 = String.format("(%f, %d)", pmi, sum);
       context.write(new PairOfStrings(a, b), new Text(value1));
     }
   }
