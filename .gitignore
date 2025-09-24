@@ -9,3 +9,6 @@
 !pom.xml
 !*.md
 !src/**
+
+
+src/**/*.ignore
