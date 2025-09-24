@@ -290,6 +290,12 @@ public class PairsPMI extends Configured implements Tool {
     Job job1 = Job.getInstance(getConf(), "PairsPMI-WordCount");
     job1.setJarByClass(PairsPMI.class);
 
+    job1.getConfiguration().setInt("mapred.max.split.size", 1024 * 1024 * 32);
+    job1.getConfiguration().set("mapreduce.map.memory.mb", "3072");
+    job1.getConfiguration().set("mapreduce.map.java.opts", "-Xmx3072m");
+    job1.getConfiguration().set("mapreduce.reduce.memory.mb", "3072");
+    job1.getConfiguration().set("mapreduce.reduce.java.opts", "-Xmx3072m");
+
     job1.setMapperClass(WordCountMapper.class);
     job1.setReducerClass(WordCountReducer.class);
 
@@ -329,6 +335,12 @@ public class PairsPMI extends Configured implements Tool {
 
     Job job2 = Job.getInstance(conf2, "PairsPMI-Pairs");
     job2.setJarByClass(PairsPMI.class);
+
+    job2.getConfiguration().setInt("mapred.max.split.size", 1024 * 1024 * 32);
+    job2.getConfiguration().set("mapreduce.map.memory.mb", "3072");
+    job2.getConfiguration().set("mapreduce.map.java.opts", "-Xmx3072m");
+    job2.getConfiguration().set("mapreduce.reduce.memory.mb", "3072");
+    job2.getConfiguration().set("mapreduce.reduce.java.opts", "-Xmx3072m");
 
     job2.setMapperClass(PairsMapper.class);
     job2.setCombinerClass(PairsCombiner.class);
