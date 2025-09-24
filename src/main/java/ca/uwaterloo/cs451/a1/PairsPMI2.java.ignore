@@ -1,0 +1,420 @@
+package ca.uwaterloo.cs451.a1;
+
+import io.bespin.java.util.Tokenizer;
+import org.apache.hadoop.conf.Configuration; //
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.FSDataInputStream; //
+import org.apache.hadoop.fs.FileStatus; //
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Partitioner;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
+import org.apache.log4j.Logger;
+import org.kohsuke.args4j.CmdLineException;
+import org.kohsuke.args4j.CmdLineParser;
+import org.kohsuke.args4j.Option;
+import org.kohsuke.args4j.ParserProperties;
+import tl.lin.data.pair.PairOfStrings;
+
+import org.apache.hadoop.fs.RemoteIterator; //
+import org.apache.hadoop.fs.LocatedFileStatus; //
+
+
+import java.io.BufferedReader; //
+import java.io.BufferedWriter; //
+import java.io.InputStreamReader; //
+import java.io.InputStreamWriter; //
+import java.net.URI; //
+
+import java.util.Map; //
+import java.util.HashMap; //
+import java.util.Set; //
+import java.util.HashSet; //
+import java.util.List; //
+import java.util.ArrayList; //
+import java.util.LinkedHashSet; //
+
+import java.io.IOException;
+import java.util.Iterator;
+import java.util.List;
+
+
+/**
+ * PairsPMI: implementation of the algorith for computing PMI and count of co-occurring pairs
+ *      1st Job: counts unique words per line, which will be needed as p(x) for PMI computation. Also counts lines (N)
+ * @author Cesar Alvarez-Cascos
+ */
+
+public class PairsPMI2 extends Configured implements Tool {
+     private static final Logger LOG = Logger.getLogger(PairsPMI2.class);
+
+  // 1st JOB: counts pairs per line, unique words per line and number of lines with a counter
+
+  private static final class CountMapper extends Mapper<LongWritable, Text, PairOfStrings, IntWritable> {
+    private static final PairOfStrings PAIR = new PairOfStrings();
+    private static final IntWritable ONE = new IntWritable(1);
+    private int maxWords = 40;
+
+    @Override
+    public void setup(Context context)  {
+        maxWords = context.getConfiguration().getInt("pairs.maxWords", 40);
+    }
+
+
+    @Override
+    public void map(LongWritable key, Text value, Context context)
+        throws IOException, InterruptedException {
+        // Increment Counter of lines (even empty ones) 'N'
+        context.getCounter("PairsPMI2", "N").increment(1);
+        // Tokenize line (key is the number of the line and value the text in it)
+        List<String> tokens = Tokenizer.tokenize(value.toString());
+        // If line is empty, nothign has to be done in this one, but counter has already been incremented
+        if (tokens == null || tokens.size() == 0) return; 
+
+        // Limit (Keep only the first 40 words )
+        int limit = Math.min(maxWords, tokens.size());
+
+        // We don't want to count repeated words more than one -> take unique tokens
+        Set<String> uniqueW = new HashSet<>();
+        for (int i = 0; i < limit; i++) uniqueW.add(tokens.get(i)); // Each unique word one per line
+
+
+        List<String> uniqueTokens = new ArrayList<>(uniqueW);
+
+        // Mapper output is the pair: pair and its count/frequency
+        for (int i = 0; i < uniqueTokens.size(); i++) {
+            String w = uniqueTokens.get(i);
+            // Marginal (word, *)
+            PAIR.set(w, "*");
+            context.write(PAIR, ONE);
+
+            // Pair (w1, w2)
+            for (int j = 0; j < uniqueTokens.size(); j++){
+                if (i==j) continue;
+                String w2 = uniqueTokens.get(j);
+                PAIR.set(w, w2);
+                context.write(PAIR, ONE);
+            }
+        }
+    }
+  }
+  
+
+    // Combiner: Aggregate every occurrence of each pair/marginal word (reducer summing) 
+  private static final class SumCombiner extends Reducer<PairOfStrings, IntWritable, PairOfStrings, IntWritable> {
+    private static final IntWritable SUM = new IntWritable();
+
+    @Override
+    public void reduce(PairOfStrings key, Iterable<IntWritable> values, Context context)
+        throws IOException, InterruptedException {
+      int sum = 0;
+      Iterator<IntWritable> iter = values.iterator();
+      while (iter.hasNext()) {
+        sum += iter.next().get();
+      }
+      SUM.set(sum);
+      context.write(key, SUM); // Pair ((w1,w2), count)
+    }
+  }
+
+    // Reducer: sums and gets the Job's Output
+        // Output Value is an intermediate value. It is Text to allow 2nd Job read these, and human readable to allow it being interpreted
+  private static final class SumReducer extends Reducer<PairOfStrings, IntWritable, Text, Text> {
+    private final Text OUTKEY = new Text();
+    private final Text OUTVAL = new Text();
+
+    @Override
+    public void reduce(PairOfStrings key, Iterable<IntWritable> values, Context context)
+        throws IOException, InterruptedException {
+      int sum = 0;
+
+      Iterator<IntWritable> iter = values.iterator();
+      while (iter.hasNext()) {
+        sum += iter.next().get();
+      }
+    
+      // Output as: "((w1 w2) count)"
+      OUTKEY.set(key.getLeftElement() + "\t" + key.getRightElement());
+      OUTVAL.set(Integer.toString(sum)); // It is Text
+      context.write(OUTKEY, OUTVAL);
+    }
+  }
+
+    // Partitioner by Left Element: chooses which reducer to send the key.
+   // Partition by left element so that all (w,*) and (w1, w2) go to same reducer if multiple reducers used.
+  private static final class LeftPartitioner extends Partitioner<PairOfStrings, IntWritable> {
+    @Override
+    public int getPartition(PairOfStrings key, IntWritable value, int numReduceTasks) {
+      return (key.getLeftElement().hashCode() & Integer.MAX_VALUE) % numReduceTasks;
+    }
+  }
+
+
+  // 2nd JOB: compute PMI 
+
+  private static final class PMIMapper extends Mapper<LongWritable, Text, Text, Text> {
+    private final Map<String, Integer> marginals = new HashMap<>();
+    private long N = 0L;
+    private int threshold = 1;
+
+    // Get the configuration each time mapper is run
+    @Override
+    protected void setup(Context context) throws IOException {
+        Configuration conf = context.getConfiguration();
+        threshold = conf.getInt("threshold", 1);
+        N = conf.getLong("N", 0L);
+
+
+        String marginalsPath = conf.get("MarginalsPath");
+        if (marginalsPath == null) {
+            throw new IOException("MarginalsPath not in configuration");
+        }
+
+        // Read Marginals from file
+        Path path = new Path(marginalsPath);
+        FileSystem fs = FileSystem.get(conf);
+
+        BufferedReader buffer = new BufferedReader(new InputStreamReader(fs.open(path)));
+        String line; // To read each line of the intermediate file from Job 1
+        while ((line = buffer.readLine()) != null) {
+            String[] storedValues = line.split("\t"); // List of strings, recognise elements separated by \t
+            if (storedValues.length < 2) continue; // Lines shouldn't have less than 2 values
+            String token = storedValues[0];
+
+            int count;
+            try {
+                count = Integer.parseInt(storedValues[1]);
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            marginals.put(token, count);
+        }
+        buffer.close();
+    }
+
+
+    @Override
+    public void map(LongWritable key, Text value, Context context)
+        throws IOException, InterruptedException {
+
+      // Input is Job 1 Output: "w1 w2 count" (they are separated by \t)
+      String line = value.toString();
+      if (line == null || line.length() == 0) return;
+
+      String[] values = line.split("\t");
+      if (values.length < 3) return; // Should not have less than 3 elements
+      String w1 = values[0];
+      String w2 = values[1];
+      int paircount;
+      try {
+        paircount = Integer.parseInt(values[2]);
+      } catch (NumberFormatException e) {
+        return;
+      }
+
+      // Skip marginals 
+      if ("*".equals(w2)) return;
+
+      // Threshold condition
+      if (paircount < threshold) return;
+
+      // Compute PMI
+      Integer w1Count = marginals.get(w1);
+      Integer w2Count = marginals.get(w2);
+      if (w1Count == null || w2Count == null || w1Count == 0 || w2Count == 0) return;
+
+      // Compute PMI
+      double numerator = paircount * (double) N;
+      double denominator = w1Count.doubleValue() * w2Count.doubleValue();
+      double result = numerator / denominator;
+      if (result <= 0.0) return;
+
+      double pmi = Math.log10(result);
+
+      // Output Format  
+      Text outKey = new Text("(" + w1 + "," + w2 + ")");
+      Text outVal = new Text(String.format("%.6f\t%d", pmi, paircount));
+      context.write(outKey, outVal);
+    
+    }
+  }
+
+  
+  /**
+   * Creates an instance of this tool.
+   */
+  private PairsPMI2() {}
+
+  private static final class Args {
+    @Option(name = "-input", metaVar = "[path]", required = true, usage = "input path")
+    String input;
+
+    @Option(name = "-output", metaVar = "[path]", required = true, usage = "output path")
+    String output;
+
+    // Number of reducers to use (default is 1)
+    @Option(name = "-reducers", metaVar = "[num]", usage = "number of reducers")
+    int numReducers = 1;
+
+    // Threshold: minimum co-occurrences of a pair (default is 1)
+    @Option(name = "-threshold", metaVar = "[num]", usage = "cooccurrence threshold")
+    int threshold = 1;
+  }
+
+
+  /**
+   * Runs this tool.
+   */
+  @Override
+  public int run(String[] argv) throws Exception {
+    final Args args = new Args();
+    CmdLineParser parser = new CmdLineParser(args, ParserProperties.defaults().withUsageWidth(100));
+    
+    try {
+      parser.parseArgument(argv);
+    } catch (CmdLineException e) {
+      System.err.println(e.getMessage());
+      parser.printUsage(System.err);
+      return -1;
+    }
+
+    LOG.info("Tool: " + PairsPMI2.class.getSimpleName());
+    LOG.info(" - input path: " + args.input);
+    LOG.info(" - output path: " + args.output);
+    LOG.info(" - number of reducers: " + args.numReducers);
+    LOG.info(" - threshold: " + args.threshold);
+
+    // Intermediate Paths
+    Path job1Pairs = new Path(args.output + "_job1Pairs");
+    Path job1Marginals = new Path(args.output + "_job1Marginals");
+
+    // Job 1: pairs counts 
+
+    Job job1 = Job.getInstance(getConf(), "PairsPMI2-CountPairs");
+    job1.setJarByClass(PairsPMI2.class);
+
+    job1.setMapperClass(CountMapper.class);
+    job1.setCombinerClass(SumCombiner.class);
+    job1.setReducerClass(SumReducer.class);
+    job1.setPartitionerClass(LeftPartitioner.class);
+
+    job1.setMapOutputKeyClass(PairOfStrings.class);
+    job1.setMapOutputValueClass(IntWritable.class);
+    job1.setOutputKeyClass(Text.class);
+    job1.setOutputValueClass(Text.class);
+
+    // Definte input and output paths of this Job
+      // outputWordCounts is the path for the temporary data we need from Job 1 to Job 2
+    FileInputFormat.setInputPaths(job1, new Path(args.input));
+
+    // Delete the output directory if it exists already.
+    FileSystem.get(getConf()).delete(job1Pairs, true);
+    FileSystem.get(getConf()).delete(job1Marginals, true);
+
+    FileOutputFormat.setOutputPath(job1, job1Pairs); // This is not 'args.output'
+
+
+    job1.setNumReduceTasks(args.numReducers);
+
+    long startTime = System.currentTimeMillis();
+    job1.waitForCompletion(true);
+
+    // Total Lines Counter
+    long N = job1.getCounters().findCounter("PairsPMI2", "N").getValue();
+    LOG.info("N = " + N);
+    
+    // Extract marginals from Job1 output
+    // We want lines where w2 == "*" and write "w count" into marginalsPath.
+    extractMarginals(conf, job1Pairs, job1Marginals); // This method is later defined
+
+
+    // Job 2: PMI computation
+
+    Job job2 = Job.getInstance(getConf(), "PairsPMI2-PMIcomp");
+    job2.setJarByClass(PairsPMI2.class);
+
+    // Get the configuration
+    job2.getConfiguration().setLong("N", N);
+    job2.getConfiguration().setInt("threshold", args.threshold);
+    job2.getConfiguration().set("MarginalsPath", marginalsPath.toString());
+
+    job2.setMapperClass(PMIMapper.class);
+
+    job2.setMapOutputKeyClass(Text.class);
+    job2.setMapOutputValueClass(Text.class);
+    job2.setOutputKeyClass(Text.class);
+    job2.setOutputValueClass(Text.class);
+
+    job2.setOutputFormatClass(TextOutputFormat.class);
+
+    // Definte input and output paths of this Job
+    FileInputFormat.setInputPaths(job2, job1Pairs); // we read Job1 output
+
+    Path outputDir = new Path(args.output);
+    // Delete the output directory if it exists already.
+    FileSystem.get(getConf()).delete(outputDir, true);
+    FileOutputFormat.setOutputPath(job2, outputDir);
+
+    job2.setNumReduceTasks(0); // This job only maps
+
+
+    job2.waitForCompletion(true);
+    System.out.println("Job Finished in " + (System.currentTimeMillis() - startTime) / 1000.0 + " seconds");
+
+    return 0;
+  }
+
+  /**
+   * Reads Job 1 output directory and writes marginals (w * count) into another file, writing (w count)
+   */
+  private void extractMarginals(Configuration conf, Path job1OutputDir, Path marginalsOutput) 
+  throws IOException {
+    FileSystem fs = FileSystem.get(conf);
+    // Create file
+    BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(fs.create(marginalsOutput, true)));
+
+    FileStatus[] stats = fs.listStatus(job1OutputDir);
+    for (FileStatus st : stats) {
+      if (!st.isFile()) continue;
+
+      String name = st.getPath().getName();
+      if (!name.startsWith("part")) continue;
+
+      BufferedReader br = new BufferedReader(new InputStreamReader(fs.open(st.getPath())));
+      String line;
+
+      while ((line = br.readLine()) != null) {
+        String[] values = line.split("\t");
+        // Job1 output at this moment is "w1 w2 count"
+        if (values.length < 3) continue;
+
+        if ("*".equals(values[1])) {
+          bw.write(values[0] + "\t" + values[2]); // Forget about the '*'
+          bw.newLine();
+        }
+      }
+      br.close();
+    }
+    bw.close();
+  }
+
+    /**
+   * Dispatches command-line arguments to the tool via the {@code ToolRunner}.
+   *
+   * @param args command-line arguments
+   * @throws Exception if tool encounters an exception
+   */
+  public static void main(String[] args) throws Exception {
+    ToolRunner.run(new PairsPMI2(), args);
+  }
+}
