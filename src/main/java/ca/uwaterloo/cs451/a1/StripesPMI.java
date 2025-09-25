@@ -26,13 +26,21 @@ import org.kohsuke.args4j.ParserProperties;
 import tl.lin.data.map.HMapStFW;
 import tl.lin.data.map.HMapStIW;
 import tl.lin.data.map.MapKF;
+import tl.lin.data.map.MapKI;
 
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.util.LineReader;
+import org.apache.hadoop.io.MapWritable;
 
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.ArrayList;
 
 /**
  * StripesPMI: implementation of the algorith for computing PMI and count of co-occurring pairs by using Stripes
@@ -138,7 +146,7 @@ public class StripesPMI extends Configured implements Tool {
 
     // Reducer: compute PMI for each pair of words using the frequencies of 1st Job and applying threshold
     // Out Value of the reducer is a Stripes Map because it is the Stripes for each word as Key
-  private static final class StripesReducer extends Reducer<Text, HMapStIW, Text, HMapStIW> {
+  private static final class StripesReducer extends Reducer<Text, HMapStIW, Text, Text> {
     private Map<String, Integer> wordCounts = new HashMap<>(); // For getting the individual words counts
     private long N = 0L; // N : Total number of lines
     private int threshold = 1; // Minimum threshold
@@ -184,15 +192,15 @@ public class StripesPMI extends Configured implements Tool {
     @Override
     public void reduce(Text key, Iterable<HMapStIW> values, Context context)
         throws IOException, InterruptedException {
-            // The Stripe Map for the Key word (its co-occurrent words and their count)
+        // The Stripe Map for the Key word (its co-occurrent words and their count)
       HMapStIW stripe = new HMapStIW();
         // Sum every values of the stripes of different lines 
       for (HMapStIW v : values) stripe.plus(v);
 
-        // New Stripe for final output
-      HMapStIW output = new HMapStIW();
+        // For final output
+      Map<String, String> outputMap = new HashMap<>();
 
-      for (MapKF.Entry<String> entry : stripe.entrySet()) {
+      for (MapKI.Entry<String> entry : stripe.entrySet()) {
         String w = entry.getKey(); // Co-occurrent word with key word
         int cab = entry.getValue(); // Co-occurrence value
 
@@ -210,11 +218,19 @@ public class StripesPMI extends Configured implements Tool {
         double pmi = Math.log10(numerator / denominator);
 
         // Output Format
-        output.put(w, String.format("(%f, %d)", pmi, cab));
+        outputMap.put(w, "(" + pmi + "," + cab + ")");
       }
 
-      if (!output.isEmpty()) {
-        context.write(key, output);
+      if (!outputMap.isEmpty()) {
+        StringBuilder output = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, String> e : outputMap.entrySet()) {
+            if (!first) output.append(", ");
+            output.append(e.getKey()).append("=").append(e.getValue());
+            first = false;
+        }
+        output.append("}");
+        context.write(key, new Text(output.toString()));
       }
     }
   }
@@ -325,7 +341,7 @@ public class StripesPMI extends Configured implements Tool {
     job2.setMapOutputKeyClass(Text.class);
     job2.setMapOutputValueClass(HMapStIW.class);
     job2.setOutputKeyClass(Text.class);
-    job2.setOutputValueClass(HMapStIW.class);
+    job2.setOutputValueClass(Text.class);
 
     job2.setOutputFormatClass(TextOutputFormat.class);
 
