@@ -1,13 +1,16 @@
 package ca.uwaterloo.cs451.a1;
 
 import io.bespin.java.util.Tokenizer;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Partitioner;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
@@ -30,3 +33,331 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+
+/**
+ * StripesPMI: implementation of the algorith for computing PMI and count of co-occurring pairs by using Stripes
+ * @author Cesar Alvarez-Cascos
+ */
+
+
+public class StripesPMI extends Configured implements Tool {
+  private static final Logger LOG = Logger.getLogger(StripesPMI.class);
+
+  // 1st Job: count unique words per line (number of lines in which a word appears)
+
+  private static final class WordCountMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+    private static final Text WORD = new Text();
+    private static final IntWritable ONE = new IntWritable(1);
+    private int maxWords = 40;
+
+    @Override
+    public void map(LongWritable key, Text value, Context context)
+        throws IOException, InterruptedException {
+      // Increment Counter of Lines (also empty lines) N
+      context.getCounter("PMI", "N").increment(1);
+      // Tokenize line (key is the number of the line and value the text in it)
+      List<String> tokens = Tokenizer.tokenize(value.toString());
+      // If line is empty, nothign has to be done in this one, but counter has already been incremented
+        if (tokens == null || tokens.size() == 0) return;
+
+      // Keep only the first 40 words 
+      int limit = Math.min(maxWords, tokens.size());
+      // We don't want to count repeated words more than one -> take unique tokens
+      Set<String> uniqueW = new HashSet<>();
+      for (int i = 0; i < limit; i++) uniqueW.add(tokens.get(i)); // Each unique word one per line
+      // Mapper output is the pair: word and its counter/frequency (in fact it is word and ONE, counter will be sum up later)
+
+      for (String w : uniqueW) {
+        WORD.set(w);
+        context.write(WORD, ONE);
+      }
+    }
+  }
+
+    // Reducer: Aggregate every occurrence of each word 
+  private static final class WordCountReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+    private static final IntWritable SUM = new IntWritable();
+
+    @Override
+    public void reduce(Text key, Iterable<IntWritable> values, Context context)
+        throws IOException, InterruptedException {
+      int sum = 0;
+      Iterator<IntWritable> iter = values.iterator();
+      while (iter.hasNext()) {
+        sum += iter.next().get();
+      }
+      SUM.set(sum);
+      context.write(key, SUM); // Pair (word, count)
+    }
+  }
+
+
+  // 2nd Job: create Stripes and comput PMI
+
+  private static final class StripesMapper extends Mapper<LongWritable, Text, Text, HMapStIW> {
+    private static final Text KEY = new Text();
+    private static final HMapStIW MAP = new HMapStIW();
+    private int maxWords = 40;
+
+    @Override
+    public void map(LongWritable key, Text value, Context context)
+        throws IOException, InterruptedException {
+      List<String> tokens = Tokenizer.tokenize(value.toString());
+      if (tokens == null || tokens.size() == 0) return;
+
+      int limit = Math.min(maxWords, tokens.size());
+      // Only unique words, maximum 40 per line
+      List<String> uniqueW = new ArrayList<>(new LinkedHashSet<>(tokens.subList(0, limit)));
+
+      for (int i = 0; i < uniqueW.size(); i++) {
+        String a = uniqueW.get(i);
+        MAP.clear();
+        for (int j = 0; j < uniqueW.size(); j++) {
+          if (i == j) continue;  // Don't count co-occurrence with the word itself
+          MAP.increment(uniqueW.get(j)); // +1 Co-occurrence of word j with i in same line
+        }
+        KEY.set(a);
+        context.write(KEY, MAP);
+      }
+    }
+  }
+
+  // Combiner: for each key, aggregate stripes co-occurrences by suming up their values
+  private static final class StripesCombiner extends Reducer<Text, HMapStIW, Text, HMapStIW> {
+    @Override
+    public void reduce(Text key, Iterable<HMapStIW> values, Context context)
+        throws IOException, InterruptedException {
+      HMapStIW sum = new HMapStIW();
+
+      for (HMapStIW v : values) {
+        sum.plus(v);
+      }
+      context.write(key, sum);
+    }
+  }
+
+    // Reducer: compute PMI for each pair of words using the frequencies of 1st Job and applying threshold
+    // Out Value of the reducer is a Stripes Map because it is the Stripes for each word as Key
+  private static final class StripesReducer extends Reducer<Text, HMapStIW, Text, HMapStIW> {
+    private Map<String, Integer> wordCounts = new HashMap<>(); // For getting the individual words counts
+    private long N = 0L; // N : Total number of lines
+    private int threshold = 1; // Minimum threshold
+
+    @Override
+    protected void setup(Context context) throws IOException {
+      Configuration conf = context.getConfiguration();
+      threshold = conf.getInt("threshold", 1);
+      N = conf.getLong("N", 0L);
+
+      // Read wordcounts from Job 1 output (path is 'outputWordCounts')
+        // The way this works, is in the job2 instance creation we set its configuration:
+        // "conf2.set("wordCountsPath", outputWordCounts.toString())" being "outputWordCounts"
+        // the output path of job1. So here we use wcDir as the directory of the job1 output, 
+        // which is in the configuration
+
+      Path wcDir = new Path(conf.get("wordCountsPath"));
+      FileSystem fs = FileSystem.get(conf);
+
+      for (FileStatus status : fs.listStatus(wcDir)) {
+        Path path = status.getPath();
+        if (!path.getName().startsWith("part-")) continue;
+
+        try (LineReader reader = new LineReader(fs.open(path))) {
+          Text txt = new Text();
+          while (reader.readLine(txt) > 0) {
+            String line = txt.toString().trim();
+            if (line.isEmpty()) continue;
+
+            String[] values = line.split("\t");
+            // List of values that we got from the line of the Job 1 output should be at least 2 (word and count) 
+            if (values.length >= 2) {
+              String w = values[0];
+              int count = Integer.parseInt(values[1]);
+              wordCounts.put(w, count);
+            }
+          }
+        }
+      }
+    }
+
+    // Reducer: computes PMI for each words pair
+    @Override
+    public void reduce(Text key, Iterable<HMapStIW> values, Context context)
+        throws IOException, InterruptedException {
+            // The Stripe Map for the Key word (its co-occurrent words and their count)
+      HMapStIW stripe = new HMapStIW();
+        // Sum every values of the stripes of different lines 
+      for (HMapStIW v : values) stripe.plus(v);
+
+        // New Stripe for final output
+      HMapStIW output = new HMapStIW();
+
+      for (MapKF.Entry<String> entry : stripe.entrySet()) {
+        String w = entry.getKey(); // Co-occurrent word with key word
+        int cab = entry.getValue(); // Co-occurrence value
+
+        if (cab < threshold) continue; // We don't return as in PairsPMI, as now we still want to process the rest of the Stripe of this Key
+        
+        // Take count of each word (previously obtained in the map built with Job1 output)
+        Integer ca = wordCounts.get(key.toString()); // is the value of the Key word
+        Integer cb = wordCounts.get(w);  // is the value of the  co-occurrent word with the key word
+
+        if (ca == null || cb == null || ca == 0 || cb == 0 || N == 0) continue; // We don't return as in PairsPMI, as now we still want to process the rest of the Stripe of this Key
+
+        // Compute PMI
+        double numerator = (double) cab * (double) N;
+        double denominator = (double) ca * (double) cb;
+        double pmi = Math.log10(numerator / denominator);
+
+        // Output Format
+        output.put(w, String.format("(%f, %d)", pmi, cab));
+      }
+
+      if (!output.isEmpty()) {
+        context.write(key, output);
+      }
+    }
+  }
+
+
+
+  /**
+   * Creates an instance of this tool.
+   */
+  private StripesPMI() {}
+
+  private static final class Args {
+    @Option(name = "-input", metaVar = "[path]", required = true, usage = "input path")
+    String input;
+
+    @Option(name = "-output", metaVar = "[path]", required = true, usage = "output path")
+    String output;
+
+    // Number of reducers to use (default is 1)
+    @Option(name = "-reducers", metaVar = "[num]", usage = "number of reducers")
+    int numReducers = 1;
+
+    // Threshold: minimum co-occurrences of a pair (default is 1)
+    @Option(name = "-threshold", metaVar = "[num]", usage = "cooccurrence threshold")
+    int threshold = 1;
+  }
+
+
+  /**
+   * Runs this tool.
+   */
+  @Override
+  public int run(String[] argv) throws Exception {
+    Args args = new Args();
+    CmdLineParser parser = new CmdLineParser(args, ParserProperties.defaults().withUsageWidth(100));
+
+    try {
+      parser.parseArgument(argv);
+    } catch (CmdLineException e) {
+      System.err.println(e.getMessage());
+      parser.printUsage(System.err);
+      return -1;
+    }
+
+    LOG.info("Tool: " + StripesPMI.class.getSimpleName());
+    LOG.info(" - input path: " + args.input);
+    LOG.info(" - output path: " + args.output);
+    LOG.info(" - number of reducers: " + args.numReducers);
+    LOG.info(" - threshold: " + args.threshold);
+
+    // Job 1: words counts - - - - -
+    Job job1 = Job.getInstance(getConf(), "StripesPMI-WordCount");
+    job1.setJarByClass(StripesPMI.class);
+
+    job1.getConfiguration().setInt("mapred.max.split.size", 1024 * 1024 * 32);
+    job1.getConfiguration().set("mapreduce.map.memory.mb", "3072");
+    job1.getConfiguration().set("mapreduce.map.java.opts", "-Xmx3072m");
+    job1.getConfiguration().set("mapreduce.reduce.memory.mb", "3072");
+    job1.getConfiguration().set("mapreduce.reduce.java.opts", "-Xmx3072m");
+
+    job1.setMapperClass(WordCountMapper.class);
+    job1.setReducerClass(WordCountReducer.class);
+
+    job1.setMapOutputKeyClass(Text.class);
+    job1.setMapOutputValueClass(IntWritable.class);
+    job1.setOutputKeyClass(Text.class);
+    job1.setOutputValueClass(IntWritable.class);
+
+    // Definte input and output paths of this Job
+      // outputWordCounts is the path for the temporary data we need from Job 1 to Job 2
+    FileInputFormat.setInputPaths(job1, new Path(args.input));
+
+    Path outputWordCounts = new Path(args.output + "-tmp-c5alvare");
+    // Delete the output directory if it exists already.
+    FileSystem.get(getConf()).delete(outputWordCounts, true);
+
+    FileOutputFormat.setOutputPath(job1, outputWordCounts); // This is not 'args.output'
+
+    job1.setNumReduceTasks(args.numReducers);
+
+    long startTime = System.currentTimeMillis();
+    job1.waitForCompletion(true);
+
+    // Get N from counter
+    long N = job1.getCounters().findCounter("PMI", "N").getValue();
+
+    // Job 2: Stripes and PMI computation - - - - - 
+
+    Configuration conf2 = new Configuration(getConf());
+    conf2.setInt("threshold", args.threshold);
+    conf2.setLong("N", N);
+    // Add WordCounts path to the configuration of Job 2
+    conf2.set("wordCountsPath", outputWordCounts.toString());
+
+    Job job2 = Job.getInstance(conf2, "StripesPMI");
+    job2.setJarByClass(StripesPMI.class);
+
+    job2.getConfiguration().setInt("mapred.max.split.size", 1024 * 1024 * 32);
+    job2.getConfiguration().set("mapreduce.map.memory.mb", "3072");
+    job2.getConfiguration().set("mapreduce.map.java.opts", "-Xmx3072m");
+    job2.getConfiguration().set("mapreduce.reduce.memory.mb", "3072");
+    job2.getConfiguration().set("mapreduce.reduce.java.opts", "-Xmx3072m");
+
+    job2.setMapperClass(StripesMapper.class);
+    job2.setCombinerClass(StripesCombiner.class);
+    job2.setReducerClass(StripesReducer.class);
+
+    job2.setMapOutputKeyClass(Text.class);
+    job2.setMapOutputValueClass(HMapStIW.class);
+    job2.setOutputKeyClass(Text.class);
+    job2.setOutputValueClass(HMapStIW.class);
+
+    job2.setOutputFormatClass(TextOutputFormat.class);
+
+    // Definte input and output paths of this Job
+    FileInputFormat.setInputPaths(job2, new Path(args.input));
+
+    Path outputDir = new Path(args.output);
+    // Delete the output directory if it exists already.
+    FileSystem.get(conf2).delete(outputDir, true);
+    FileOutputFormat.setOutputPath(job2, outputDir);
+
+    job2.setNumReduceTasks(args.numReducers);
+
+    job2.waitForCompletion(true);
+    System.out.println("Job Finished in " + (System.currentTimeMillis() - startTime) / 1000.0 + " seconds");
+
+    return 0;
+  }
+
+    /**
+   * Dispatches command-line arguments to the tool via the {@code ToolRunner}.
+   *
+   * @param args command-line arguments
+   * @throws Exception if tool encounters any exception
+   */
+  public static void main(String[] args) throws Exception {
+    ToolRunner.run(new StripesPMI(), args);
+  }
+}
+
+
+
+
+
+

@@ -78,7 +78,6 @@ public class PairsPMI extends Configured implements Tool {
         WORD.set(w);
         context.write(WORD, ONE);
       }
-
     }
   }
 
@@ -376,7 +375,7 @@ public class PairsPMI extends Configured implements Tool {
    * Dispatches command-line arguments to the tool via the {@code ToolRunner}.
    *
    * @param args command-line arguments
-   * @throws Exception if tool encounters an exception
+   * @throws Exception if tool encounters any exception
    */
   public static void main(String[] args) throws Exception {
     ToolRunner.run(new PairsPMI(), args);
