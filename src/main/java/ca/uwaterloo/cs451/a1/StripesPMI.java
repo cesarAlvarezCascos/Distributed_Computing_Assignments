@@ -372,8 +372,3 @@ public class StripesPMI extends Configured implements Tool {
   }
 }
 
-
-
-
-
-
