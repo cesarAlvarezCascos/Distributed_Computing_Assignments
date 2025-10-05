@@ -12,3 +12,9 @@
 
 
 src/**/*.ignore
+
+# Ignore generated files and tools
+.metals/
+.reports/
+metals-full/
+2025-10-02/
