@@ -32,7 +32,7 @@ object ComputeBigramRelativeFrequencyStripes extends Tokenizer {
     val outputDir = new Path(args.output())
     FileSystem.get(sc.hadoopConfiguration).delete(outputDir, true)
 
-    val textFile = sc.textFile(args.input())
+    val textFile = sc.textFile(args.input(), args.reducers())
 
     // Generate Stripes: for each word, one Map of consecutive words and their counts
     val stripes = textFile.flatMap(line => {
@@ -46,11 +46,10 @@ object ComputeBigramRelativeFrequencyStripes extends Tokenizer {
     })
 
     // Sum maps for each word
-    val combined = stripes.reduceByKey((m1, m2) => { // Reducer (groups by equal bigrams)
-      (m1.keySet ++ m2.keySet).map { k =>  // Sum the set of keys of both words' maps
-        k -> (m1.getOrElse(k, 0.0f) + m2.getOrElse(k, 0.0f))
-      }.toMap
-    }, args.reducers()) // Specify number of reducers
+    val combined = stripes.reduceByKey((m1, m2) => {
+      m1 ++ m2.map { case (k, v) => k -> (v + m1.getOrElse(k, 0.0f)) }
+      // Taking m1 as base, updates the map by adding keys coming from m2, if key is in both, it sums the values
+    }, args.reducers())  // Specify number of reducer
 
     // Compute Relative Frequencies
     val relativeFreqs = combined.map { case (w1, stripe) =>

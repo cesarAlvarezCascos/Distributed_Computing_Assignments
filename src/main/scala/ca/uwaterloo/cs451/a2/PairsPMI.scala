@@ -37,7 +37,7 @@ object PairsPMI extends Tokenizer {
     val outputDir = new Path(args.output())
     FileSystem.get(sc.hadoopConfiguration).delete(outputDir, true)
 
-    val textFile = sc.textFile(args.input())
+    val textFile = sc.textFile(args.input(), args.reducers())
 
     // Count total number of lines
     val N = textFile.count()

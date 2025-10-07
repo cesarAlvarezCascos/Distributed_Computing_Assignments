@@ -33,7 +33,7 @@ object ComputeBigramRelativeFrequencyPairs extends Tokenizer {
     val outputDir = new Path(args.output())
     FileSystem.get(sc.hadoopConfiguration).delete(outputDir, true)
 
-    val textFile = sc.textFile(args.input())
+    val textFile = sc.textFile(args.input(), args.reducers())
     
     // Generate pairs (bigram, count) and ((left_word, *), count) for marginals
     val pairs = textFile

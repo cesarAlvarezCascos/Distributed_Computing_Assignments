@@ -37,7 +37,7 @@ object StripesPMI extends Tokenizer {
     val outputDir = new Path(args.output())
     FileSystem.get(sc.hadoopConfiguration).delete(outputDir, true)
 
-    val textFile = sc.textFile(args.input())
+    val textFile = sc.textFile(args.input(), args.reducers())
 
     // Count total number of lines
     val N = textFile.count()
@@ -74,10 +74,8 @@ object StripesPMI extends Tokenizer {
 
       // Combine stripes by merging maps 
       .reduceByKey((m1, m2) => { // m1 and m2 are stripes of the same key (word)
-        (m1.keySet ++ m2.keySet).map { k =>
-          k -> (m1.getOrElse(k, 0) + m2.getOrElse(k, 0))
-          // Combines the keys of both stripes m1 and m2, then it goes along every key in this new map and sum their values
-        }.toMap
+        m1 ++ m2.map { case (k, v) => k -> (v + m1.getOrElse(k, 0)) }
+          // Taking m1 as base, updates the map by adding keys coming from m2, if key is in both, it sums the values
       }, args.reducers())
 
 
