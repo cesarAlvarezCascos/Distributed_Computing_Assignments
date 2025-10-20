@@ -63,8 +63,8 @@ public class BuildInvertedIndexCompressed extends Configured implements Tool {
 
   // Instead of "PairOfWritables<IntWritable, ArrayListWritable<PairOfInts>>" , what is saving postings as ArrayListWritable java objects, they are stored as 
   // compressed bytes arrays "BytesWritable"
-  private static final class MyReducer extends Reducer<Text, PairOfInts, Text, PairOfWritables<IntWritable, BytesWritable>> {
-    private static final IntWritable DF = new IntWritable();
+  private static final class MyReducer extends Reducer<Text, PairOfInts, Text, BytesWritable> {
+    // private static final IntWritable DF = new IntWritable();
     private static final BytesWritable POSTINGS = new BytesWritable();
 
     @Override
@@ -79,29 +79,38 @@ public class BuildInvertedIndexCompressed extends Configured implements Tool {
 
       Collections.sort(postingsList);
       int df = postingsList.size();
-      DF.set(df);
+      // DF.set(df);
 
       // Compress postings: [docid_gap, tf] using VInts
       // ByteArrayOutputStream and DataOutputStream are used to encode gaps (difference between docs IDs) and term frequency tf as VInt
       ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
       DataOutputStream dataStream = new DataOutputStream(byteStream);
+
+
+      // Include DF in compressed bytes
+      WritableUtils.writeVInt(dataStream, df);
+
       int prevDocId = 0;
-      for (int i = 0; i < postingsList.size(); i++) {
-        int docid = postingsList.get(i).getLeftElement();
-        int tf = postingsList.get(i).getRightElement();
+      for (PairOfInts posting : postingsList) {
+        int docid = posting.getLeftElement();
+        int tf = posting.getRightElement();
+
         // Generate gaps
-        int gap = (i == 0) ? docid : (docid - prevDocId);
+        //int gap = docid - prevDocId;
+        int gap = (prevDocId == 0) ? docid : (docid - prevDocId);
+
         // Write into dataStream (data is stored as binary bytes into byteStream)
         WritableUtils.writeVInt(dataStream, gap);
         WritableUtils.writeVInt(dataStream, tf);
+
         prevDocId = docid;
       }
       dataStream.close();
       byte[] bytes = byteStream.toByteArray();
       POSTINGS.set(bytes, 0, bytes.length);  // POSTINGS.set(byte[] data, int offset, int length)
 
-      // Result is a pair (df, compressed postings)
-      context.write(key, new PairOfWritables<>(DF, POSTINGS));
+      // Only compressed bytes: DF is inside POSTINGS, but compressed as VInt instead of being a separate IntWritable 
+      context.write(key, POSTINGS);
     }
   }
 
@@ -148,7 +157,7 @@ public class BuildInvertedIndexCompressed extends Configured implements Tool {
     job.setMapOutputKeyClass(Text.class);
     job.setMapOutputValueClass(PairOfInts.class);
     job.setOutputKeyClass(Text.class);
-    job.setOutputValueClass(PairOfWritables.class);
+    job.setOutputValueClass(BytesWritable.class);
     job.setOutputFormatClass(MapFileOutputFormat.class);
 
     job.setMapperClass(MyMapper.class);

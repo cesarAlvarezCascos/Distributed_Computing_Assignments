@@ -55,7 +55,7 @@ public class BooleanRetrievalCompressed extends Configured implements Tool {
             break;
         }
     }
-    System.out.println("Loaded" + indexes.size() + " index partitions.");
+    System.out.println("Loaded " + indexes.size() + " index partitions.");
   }
 
 
@@ -136,20 +136,26 @@ public class BooleanRetrievalCompressed extends Configured implements Tool {
     // Decompress postings & Look for the term (key) in the index list
   private List<PairOfInts> fetchPostings(String term) throws IOException {
     List<PairOfInts> postings = new ArrayList<>(); // Pairs of (docID, frequency)
-    Text key = new Text();
-    PairOfWritables<IntWritable, BytesWritable> value = new PairOfWritables<>();
+    Text key = new Text(term);
+    // PairOfWritables<IntWritable, BytesWritable> value = new PairOfWritables<>();
+    BytesWritable value = new BytesWritable();
 
     // Search in every partition
     for (MapFile.Reader index : indexes) {
-        value = new PairOfWritables<>();
+        // value = new PairOfWritables<>();
+        value = new BytesWritable();
         if (index.get(key, value) != null){
             // Decompress (all the way around as we didi in BuildInvertedIndexCompressed)
-            BytesWritable bytes = value.getRightElement();
-            byte[] rawBytes = bytes.getBytes();
-            int length = bytes.getLength();
+            // BytesWritable bytes = value.getRightElement();
+            // byte[] rawBytes = bytes.getBytes();
+            byte[] rawBytes = value.getBytes();
+            int length = value.getLength();
 
             ByteArrayInputStream byteStream = new ByteArrayInputStream(rawBytes, 0, length);
             DataInputStream dataStream = new DataInputStream(byteStream);
+
+            // Read DF first 
+            int df = WritableUtils.readVInt(dataStream);
 
             int docid = 0;
             while (dataStream.available() > 0) {
