@@ -66,19 +66,19 @@ object PageRank {
         else Iterable.empty[Int]
       (origin, dests)
     }).partitionBy(partitioner).cache
-       // toInt means the input file contains numbers, we take parts 1 as origin, then we take the list of destinations
-       // we don't .groupByKey as in the file origins are already grouped by line
-       // we partition by key (origin)
-       // cache saves the RDD in memory, as it will be reused in each iteration
+       // 'toInt':  input file contains numbers, we take parts 1 as origin, then the list of destinations
+       // don't .groupByKey as in the file, origins are already grouped by line
+       // we partition by key (origin) using partitioner
+       // cache saves the RDD in memory, as it will be reused in each iteration !!
     
-    val N = adjList.count // Amount of different nodes as origin (nodes with destinations, # of unique keys are the size of the graph)
+    val N = adjList.count // Amount of different nodes as origin (# of unique keys are the size of the graph) - # of nodes
 
     // Initial Normalized Ranks
-    var ranks = adjList.mapValues(x => 1.0f / N).partitionBy(partitioner).cache  // Partitioned as adjList for efficiency
+    var ranks = adjList.mapValues(x => 1.0f / N).partitionBy(partitioner).cache  // Partitioned as adjList for efficiency (ver OneNote explicacion)
     // Being x the value of the Map for each key, what is to say, the destination nodes. 
     // It is replaced by normalized rank, same initial rank for eeevery origin node
 
-    // Ranks will be cached to avoid cumulation of RDDs and re-shuffle (each iteration creates one, so we better replace the previous ine)
+    // IMP: Ranks will be cached to avoid cumulation of RDDs and re-shuffle (each iteration will create one, so we better replace the previous one)
 
 
     // 'ranks' is the Adjacency List with the initial rank as value for each origin node
@@ -93,14 +93,23 @@ object PageRank {
             val size = adj.size // Amount of destinations per node ('adj' is the list of destinations) 
             adj.map(_ -> rank / size) // For each element in 'adj' distribute the rank equitatively, creating a pair of (dest. node, its rank)
           } else {
-            Iterator.empty // dead-ends dont send contributions
+            Iterator.empty // dead-ends don't have destinations -> dont send contributions -> missing mass
           }
       }
-      // contribs is now a list of all nodes that were a destination, with their assigned ranks (flatMap joins into a list of pairs all the adj.maps computed)
+      // contribs: list of all nodes that were a destination, with their assigned ranks (flatMap joins all the adj.maps computed into a list of pairs)
     
-      // Rank (not included missing mass yet)
-        // reduceByKey: combine 'contribs' by key, suming the different ranks assigned to each nodes by different origins
-      val newRanks = contribs.reduceByKey(_ + _, partitions).cache
+      // We have to handle nodes with in-degree 0 (they are not a destination for any node)
+      val allNodes = adjList.keys.union(ranks.keys).distinct()
+
+      // Ranks (not included missing mass)
+        // reduceByKey: combine 'contribs' by key, suming the different ranks assigned to same nodes by different origins
+      
+      // val newRanks = contribs.reduceByKey(_ + _, partitions).cache
+
+      val newRanks = allNodes.map(n => (n, 0.0f)).leftOuterJoin(contribs.reduceByKey(_ + _, partitions))
+        .mapValues{ case (zero, contrib) => contrib.getOrElse(0.0f)}
+        .cache
+
 
       // Compute actual total mass
       val totalMass = newRanks.values.sum()
