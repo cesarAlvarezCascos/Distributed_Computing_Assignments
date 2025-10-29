@@ -39,7 +39,7 @@ object PersonalizedPageRank {
 
   def main(argv: Array[String]) {
     val args = new Conf(argv)
-    val src: List[Int] = args.sources().toList  // source nodes
+    val src: List[Int] = args.sources().toList  // Source Nodes
     log.info("Input: " + args.input())
     log.info("Output: " + args.output())
     log.info("Number of partitions: " + args.partitions())
@@ -60,7 +60,9 @@ object PersonalizedPageRank {
     val partitions = if (args.partitions() > 0) args.partitions() else textFile.getNumPartitions
     val partitioner = new HashPartitioner(partitions)
 
+
     // Build Adjacency List
+
     val adjList = textFile.map(line => {
       val parts = line.split("\\s+")
       val origin = parts(0).toInt
@@ -73,18 +75,24 @@ object PersonalizedPageRank {
        // we partition by key (origin) using partitioner
        // cache saves the RDD in memory, as it will be reused in each iteration !!
     
+
     val srcSet = src.toSet
     val m = src.size // Amount of source nodes
     val N = adjList.count // Amount of different nodes as origin (# of unique keys are the size of the graph) - # of nodes
 
+
     // Initial Ranks (Only Source Nodes)
+
     var ranks = adjList.filter{case(node,_) => src.contains(node)}.mapValues(_ => 1.0f / m).partitionBy(partitioner).cache
     // Take only nodes in src, assign map Value as 1/m, use same partitioner as adjList, cache
+
 
     // 'ranks' is the Adjacency List with the initial rank as value only for each source node
     // 'adjList' is the Adjacency List with the destinations as value for each origin node
 
+
     // Compute Ranks
+
     for (i <- 1 to iterations) {
       val previousRanks = ranks
 
@@ -99,7 +107,9 @@ object PersonalizedPageRank {
       }
       // contribs: list of all nodes that were a destination, with their assigned ranks (flatMap joins all the adj.maps computed into a list of pairs)
     
+
       // We have to handle nodes with in-degree 0 (they are not a destination for any node)
+        // We need to consider ALL NODES, and some nodes may not be have a rank assigned yet, so they wont be in adjList
       val allNodes = adjList.keys.union(adjList.values.flatMap(identity)).distinct().cache
 
 
