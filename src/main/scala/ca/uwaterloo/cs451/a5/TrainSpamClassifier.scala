@@ -7,9 +7,7 @@ import org.apache.spark.SparkConf
 import org.rogach.scallop._
 
 
-// - - - - COMPARAR CON OTROS CODIGOS ANTERIORES DE SCALA PARA TENERLO EN EL MISMO FORMATO !!! - - - - - - - - - - - -- - - - -- 
-
-class Conf(args: Seq[String]) extends ScallopConf(args) {
+class TrainSpamClassifierConf(args: Seq[String]) extends ScallopConf(args) {
   mainOptions = Seq(input, model)
   val input = opt[String](descr = "input path", required = true)
   val model = opt[String](descr = "model output path", required = true)
@@ -20,7 +18,7 @@ object TrainSpamClassifier {
   val log = Logger.getLogger(getClass().getName())
 
   def main(argv: Array[String]) {
-    val args = new Conf(argv)
+    val args = new TrainSpamClassifierConf(argv)
 
     log.info("Input: " + args.input())
     log.info("Model: " + args.model())
