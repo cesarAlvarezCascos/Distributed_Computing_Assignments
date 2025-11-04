@@ -11,6 +11,7 @@ class TrainSpamClassifierConf(args: Seq[String]) extends ScallopConf(args) {
   mainOptions = Seq(input, model)
   val input = opt[String](descr = "input path", required = true)
   val model = opt[String](descr = "model output path", required = true)
+  val shuffle = opt[Boolean](descr = "shuffle training data", required = false, default = Some(false))
   verify()
 }
 
@@ -22,6 +23,7 @@ object TrainSpamClassifier {
 
     log.info("Input: " + args.input())
     log.info("Model: " + args.model())
+    log.info("Shuffle: " + args.shuffle())
 
     val conf = new SparkConf().setAppName("Train Spam Classifier")
     val sc = new SparkContext(conf)
@@ -34,8 +36,15 @@ object TrainSpamClassifier {
       // As SGD depends on the order, we need sequential processing
     val textFile = sc.textFile(args.input(), 1)
 
+    // IF SHUFFLE REQUESTED:
+    val data = if (args.shuffle()) {
+      textFile.map(line => (scala.util.Random.nextDouble(), line)).sortByKey().map(_._2)
+    } else {
+      textFile
+    }
+
     // STEP 2: Mappers are just parsing the feature vectors and pushing them over the reducer side. Emit '0' as dummy key
-    val trained = textFile.map(line => {   // mapper
+    val trained = data.map(line => {   // mapper
       // Parse input
       val parts = line.split(" ")
       val docid = parts(0)
