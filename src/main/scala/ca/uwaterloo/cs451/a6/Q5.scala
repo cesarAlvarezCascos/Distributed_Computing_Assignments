@@ -8,31 +8,28 @@ import org.rogach.scallop._
 
 import org.apache.spark.sql.SparkSession
 
-class Q4Conf(args: Seq[String]) extends ScallopConf(args) {
+class Q5Conf(args: Seq[String]) extends ScallopConf(args) {
   val input = opt[String](descr = "input path", required = true)
-  val date = opt[String](descr = "ship date YYYY-MM-DD", required = true)
 
   val text = opt[Boolean](descr = "use text input", required = false, default = Some(false))
   val parquet = opt[Boolean](descr = "use parquet input", required = false, default = Some(false))
   verify()
 }
 
-object Q4 {
+object Q5 {
   val log = Logger.getLogger(getClass().getName())
 
   def main(argv: Array[String]): Unit = {
-    val args = new Q4Conf(argv)
+    val args = new Q5Conf(argv)
 
     log.info("Input: " + args.input())
-    log.info("Date: " + args.date())
     log.info("Text: " + args.text())
     log.info("Parquet: " + args.parquet())
 
-    val conf = new SparkConf().setAppName("Q4")
+    val conf = new SparkConf().setAppName("Q5")
     val sc = new SparkContext(conf)
 
     val inputPath = args.input()
-    val date = args.date()
 
     val useText = args.text()
     val useParquet = args.parquet()
@@ -42,34 +39,35 @@ object Q4 {
       log.warn("Specify exactly one of --text or --parquet")
     }
 
-    val results: Array[(Int, String, Long)] =
+  
+    val results: Array[(Int, String, String, Long)] =
       if (useText) {
-        runText(sc, inputPath, date)
+        runText(sc, inputPath)
       } else {
-        runParquet(sc, inputPath, date)
+        runParquet(sc, inputPath)
       }
 
-    // Output Format: (n_nationkey,n_name,count)
-    results.foreach { case (nkey, nname, cnt) =>
-      println(s"($nkey,$nname,$cnt)")
+    // Output Format: (n_nationkey, n_name, yearMonth, count)
+    results.foreach { case (nkey, nname, ym, cnt) =>
+      println(s"($nkey,$nname,$ym,$cnt)")
     }
   }
 
   /**
-   * Text Version: reduce-side join lineitem - orders with cogroup and hash join (broadcast) for customer and nation
+   * Text Version
    */
-  def runText(sc: SparkContext, input: String, date: String): Array[(Int, String, Long)] = {
+  def runText(sc: SparkContext, input: String): Array[(Int, String, String, Long)] = {
     val lPath = s"$input/lineitem.tbl"
-    val oPath = s"$input/orders.tbl"
-    val cPath = s"$input/customer.tbl"
-    val nPath = s"$input/nation.tbl"
+    val oPath  = s"$input/orders.tbl"
+    val cPath  = s"$input/customer.tbl"
+    val nPath  = s"$input/nation.tbl"
 
     val nations = sc.textFile(nPath)
     val customers = sc.textFile(cPath)
     val orders = sc.textFile(oPath)
     val lines = sc.textFile(lPath)
 
-    // nation: n_nationkey (1st column, index 0), n_name (2nd column, index 1)
+    // nation: n_nationkey (1st column, index 0), n_name (2nd column, index 1) - Only need CANADA and USA
     val nationMap = nations
       .map(_.split("\\|", -1))
       .filter(_.length > 1)
@@ -80,6 +78,9 @@ object Q4 {
       }
       .collect()
       .toMap
+
+    val desired = Set("CANADA", "UNITED STATES")
+    val filteredNationMap = nationMap.filter { case (_, name) => desired.contains(name) }
 
     // customer: c_custkey (1st column, index 0), c_nationkey (4th column, index 3)
     val customerMap = customers
@@ -93,9 +94,8 @@ object Q4 {
       .collect()
       .toMap
 
-    val nationBroadcast = sc.broadcast(nationMap)
+    val nationBroadcast = sc.broadcast(filteredNationMap)
     val customerBroadcast = sc.broadcast(customerMap)
-
 
     // orders: o_orderkey (1st column, index 0), o_custkey (2nd column, index 1)
     val ordersByOrder = orders
@@ -108,62 +108,58 @@ object Q4 {
       }
 
     // lineitem: l_orderkey (1st column, index 0), l_shipdate (11th column, index 10)
-    val lineitemByOrder  = lines
+    val lineitemByOrder = lines
       .map(_.split("\\|", -1))
-      .filter(fields => fields.length > 10 && fields(10) == date)
+      .filter(_.length > 10)
       .map { fields =>
         val l_orderkey = fields(0).toLong
-        (l_orderkey, 1)      // Flag for that date
+        val shipdate = fields(10) // YYYY-MM-DD
+        (l_orderkey, shipdate)
       }
-      .distinct()          
 
-    // "Lineitem and orders wont fit in memory" -> joint with reduce-side using cogroup
+    // Join lineitem and orders with cogroup to relate eeach lineitem with its customer key
     val joined = lineitemByOrder.cogroup(ordersByOrder)
-    // joined: RDD[(Long, (Iterable[Int], Iterable[Long]))] - RDD[orderkey, Int, custKey]
+    // joined: RDD[(orderkey, (Iterable[shipdate], Iterable[custkey]))]
 
-    // For each orderkey in lineitem and orders, we get its o_custkey
-    val custByOrder = joined.flatMap { case (orderkey, (lIter, oIter)) =>
-      if (lIter.nonEmpty && oIter.nonEmpty) {
-        oIter.map(custkey => (orderkey, custkey))
+    // We want the Year-Month from the date
+    val nationMonth = joined.flatMap { case (_, (shipdates, custkeys)) =>
+      if (shipdates.nonEmpty && custkeys.nonEmpty) {
+        val customerMapValue = customerBroadcast.value
+        val nationMapValue = nationBroadcast.value
+
+        for {
+          shipdate <- shipdates.iterator
+          custkey <- custkeys.iterator
+
+          cNationKey <- customerMapValue.get(custkey)
+          // lookup (n_nationkey, n_name) and filter CANADA / US
+          nName <- nationMapValue.get(cNationKey)
+        } yield {
+          val yearMonth = shipdate.substring(0, 7) // YYYY-MM
+          ((cNationKey, nName, yearMonth), 1L)
+        }
       } else {
-        Seq.empty[(Long, Long)]
+        Seq.empty[((Int, String, String), Long)]
       }
     }
 
-    // Map (order, cust) pairs to (nationKey, nationName) using broadcast maps
-    val nationPairs = custByOrder.flatMap { case (_, custkey) =>
-      val customerMapValue = customerBroadcast.value
-      val nationMapValue   = nationBroadcast.value
-
-      customerMapValue.get(custkey) match {
-        case Some(nationKey) => nationMapValue.get(nationKey) match {
-            case Some(nationName) => Some((nationKey, nationName))
-            case None => None
-          }
-        case None => None
-      }
-    }
-
-    // Count items per nation: count(*) & Group By n_nationkey, n_name
-    val countsByNation = nationPairs
-      .map(n => (n, 1L))
+    // Now, Compute the Counts and Sort by nationKey, then Date
+    val counts = nationMonth
       .reduceByKey(_ + _)
-      .map { case ((nkey, nname), cnt) => (nkey, nname, cnt) }
+      .map { case ((nkey, nname, ym), cnt) => (nkey, nname, ym, cnt) }
+      .sortBy({ case (nkey, nname, ym, _) => (nkey, ym) }, ascending = true)
 
-    // sort by key ascending
-    countsByNation
-      .sortBy({ case (nkey, _, _) => nkey }, ascending = true)
-      .collect()
+    counts.collect()
   }
 
   /**
    * Parquet Version: reading with SparkSession.read.parquet and using RDDs
    */
-  def runParquet(sc: SparkContext, input: String, date: String): Array[(Int, String, Long)] = {
+  def runParquet(sc: SparkContext, input: String): Array[(Int, String, String, Long)] = {
     val lPath = s"$input/lineitem"
-    val oPath = s"$input/orders"
-    val cPath = s"$input/customer"
-    val nPath = s"$input/nation"
+    val oPath  = s"$input/orders"
+    val cPath  = s"$input/customer"
+    val nPath  = s"$input/nation"
 
     val sparkSession = SparkSession.builder().getOrCreate()
     // DataFrames
@@ -191,6 +187,9 @@ object Q4 {
       .collect()
       .toMap
 
+    val desired = Set("CANADA", "UNITED STATES")
+    val filteredNationMap = nationMap.filter { case (_, name) => desired.contains(name) }
+
     val customerMap = customerRDD
       .map { row =>
         val c_custkey = row.get(0) match {
@@ -210,7 +209,7 @@ object Q4 {
       .collect()
       .toMap
 
-    val nationBroadcast = sc.broadcast(nationMap)
+    val nationBroadcast = sc.broadcast(filteredNationMap)
     val customerBroadcast = sc.broadcast(customerMap)
 
     val ordersByOrder = ordersRDD
@@ -231,7 +230,7 @@ object Q4 {
       }
 
     val lineitemByOrder = lineitemRDD
-      .flatMap { row =>
+      .map { row =>  // We are not filtering here, so map instead of flatmap
         val orderkeyAny = row.get(0)
         val shipVal = row.get(1)
 
@@ -247,41 +246,37 @@ object Q4 {
           case other => other.toString
         }
 
-        if (shipdate == date) Some((l_orderkey, 1)) else None
+        (l_orderkey, shipdate)
+
       }
-      .distinct()
 
     // "Lineitem and orders wont fit in memory" -> joint with reduce-side using cogroup
     val joined = lineitemByOrder.cogroup(ordersByOrder)
 
-    val custByOrder = joined.flatMap { case (orderkey, (liIter, oIter)) =>
-      if (liIter.nonEmpty && oIter.nonEmpty) {
-        oIter.map(custkey => (orderkey, custkey))
+    val nationMonth = joined.flatMap { case (_, (shipdates, custkeys)) =>
+      if (shipdates.nonEmpty && custkeys.nonEmpty) {
+        val customerMapValue = customerBroadcast.value
+        val nationMapValue = nationBroadcast.value
+
+        for {
+          shipdate <- shipdates.iterator
+          custkey <- custkeys.iterator
+          cNationKey <- customerMapValue.get(custkey)
+          nName <- nationMapValue.get(cNationKey)
+        } yield {
+          val yearMonth = shipdate.substring(0, 7)
+          ((cNationKey, nName, yearMonth), 1L)
+        }
       } else {
-        Seq.empty[(Long, Long)]
+        Seq.empty[((Int, String, String), Long)]
       }
     }
 
-    val nationPairs = custByOrder.flatMap { case (_, custkey) =>
-      val customerMapLocal = customerBroadcast.value
-      val nationMapLocal = nationBroadcast.value
-
-      customerMapLocal.get(custkey) match {
-        case Some(nationKey) => nationMapLocal.get(nationKey) match {
-            case Some(nationName) => Some((nationKey, nationName))
-            case None => None
-          }
-        case None => None
-      }
-    }
-
-    val countsByNation = nationPairs
-      .map(n => (n, 1L))
+    val counts = nationMonth
       .reduceByKey(_ + _)
-      .map { case ((nkey, nname), cnt) => (nkey, nname, cnt) }
+      .map { case ((nkey, nname, ym), cnt) => (nkey, nname, ym, cnt) }
+      .sortBy({ case (nkey, _, ym, _) => (nkey, ym) }, ascending = true)
 
-    countsByNation
-      .sortBy({ case (nkey, _, _) => nkey }, ascending = true)
-      .collect()
+    counts.collect()
   }
 }
