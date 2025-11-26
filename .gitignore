@@ -9,7 +9,7 @@
 !pom.xml
 !*.md
 !src/**
-
+!*.pdf
 
 src/**/*.ignore
 
