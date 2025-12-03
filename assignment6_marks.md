@@ -15,9 +15,9 @@ WATIAM:c5alvare
 
 **Test 5** Q1 test 2 (Linux/Text) mark: 1.25/1.25
 
-**Test 6** Q2 test 1 (Linux/Parquet) mark: 0.0/1.25
+**Test 6** Q2 test 1 (Linux/Parquet) mark: 1.25/1.25
 
-**Test 7** Q2 test 1 (Linux/Text) mark: 0.0/1.25
+**Test 7** Q2 test 1 (Linux/Text) mark: 1.25/1.25
 
 **Test 8** Q2 test 2 (Linux/Parquet) mark: 1.25/1.25
 
@@ -31,13 +31,13 @@ WATIAM:c5alvare
 
 **Test 13** Q3 test 2 (Linux/Text) mark: 1.25/1.25
 
-**Test 14** Q4 test 1 (Linux/Parquet) mark: 0.0/1.75
+**Test 14** Q4 test 1 (Linux/Parquet) mark: 1.75/1.75
 
-**Test 15** Q4 test 1 (Linux/Text mark: 0.0/1.75
+**Test 15** Q4 test 1 (Linux/Text mark: 1.75/1.75
 
-**Test 16** Q4 test 2 (Linux/Parquet) mark: 0.0/1.75
+**Test 16** Q4 test 2 (Linux/Parquet) mark: 1.75/1.75
 
-**Test 17** Q4 test 2 (Linux/Text mark: 0.0/1.75
+**Test 17** Q4 test 2 (Linux/Text mark: 1.75/1.75
 
 **Test 18** Q5 test 1 (Linux/Parquet) mark: 3.5/3.5
 
@@ -67,9 +67,9 @@ WATIAM:c5alvare
 
 **Test 31** Q1 test 2 (Datasci/Text) mark: 1.25/1.25
 
-**Test 32** Q2 test 1 (Datasci/Parquet) mark: 0.0/1.25
+**Test 32** Q2 test 1 (Datasci/Parquet) mark: 1.25/1.25
 
-**Test 33** Q2 test 1 (Datasci/Text) mark: 0.0/1.25
+**Test 33** Q2 test 1 (Datasci/Text) mark: 1.25/1.25
 
 **Test 34** Q2 test 2 (Datasci/Parquet) mark: 1.25/1.25
 
@@ -83,13 +83,13 @@ WATIAM:c5alvare
 
 **Test 39** Q3 test 2 (Datasci/Text) mark: 1.25/1.25
 
-**Test 40** Q4 test 1 (Datasci/Parquet) mark: 0.0/1.75
+**Test 40** Q4 test 1 (Datasci/Parquet) mark: 1.75/1.75
 
-**Test 41** Q4 test 1 (Datasci/Text mark: 0.0/1.75
+**Test 41** Q4 test 1 (Datasci/Text mark: 1.75/1.75
 
-**Test 42** Q4 test 2 (Datasci/Parquet) mark: 0.0/1.75
+**Test 42** Q4 test 2 (Datasci/Parquet) mark: 1.75/1.75
 
-**Test 43** Q4 test 2 (Datasci/Text mark: 0.0/1.75
+**Test 43** Q4 test 2 (Datasci/Text mark: 1.75/1.75
 
 **Test 44** Q5 test 1 (Datasci/Parquet) mark: 3.5/3.5
 
@@ -111,11 +111,11 @@ WATIAM:c5alvare
 
 **Test 53** Q7 test 2 (Datasci/Text) mark: 2.0/2
 
-**late penalty :** None
+**late penalty :** -2
 
 **Feedback :** 
 
 **Final grade**
-mark: 81.0/100.0
+mark: 98.0/100.0
 
-summary: 21230005,c5alvare,81.0/100.0
+summary: 21230005,c5alvare,98.0/100.0
