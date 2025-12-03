@@ -22,7 +22,7 @@ object Q2 {
   val log = Logger.getLogger(getClass().getName())
 
   def main(argv: Array[String]): Unit = {
-    val args = new Q1Conf(argv)
+    val args = new Q2Conf(argv)
 
     log.info("Input: " + args.input())
     log.info("Date: " + args.date())
@@ -73,7 +73,6 @@ object Q2 {
         val l_orderkey = fields(0).toLong // orderKey is first column
         (l_orderkey, 1) // FLAG this order because it has shippings in that date
       }
-      .distinct()
 
     val ordersByKey = orders
       .map(_.split("\\|", -1))
@@ -138,7 +137,6 @@ object Q2 {
       }
       .filter { case (_, shipdate) => shipdate == date }
       .map { case (orderkey, _) => (orderkey, 1) }
-      .distinct()
 
     val ordersByKey = ordersRDD
       .map { row =>

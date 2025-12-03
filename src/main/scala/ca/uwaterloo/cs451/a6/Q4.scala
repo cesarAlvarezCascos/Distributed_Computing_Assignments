@@ -114,8 +114,7 @@ object Q4 {
       .map { fields =>
         val l_orderkey = fields(0).toLong
         (l_orderkey, 1)      // Flag for that date
-      }
-      .distinct()          
+      }        
 
     // "Lineitem and orders wont fit in memory" -> joint with reduce-side using cogroup
     val joined = lineitemByOrder.cogroup(ordersByOrder)
@@ -124,7 +123,10 @@ object Q4 {
     // For each orderkey in lineitem and orders, we get its o_custkey
     val custByOrder = joined.flatMap { case (orderkey, (lIter, oIter)) =>
       if (lIter.nonEmpty && oIter.nonEmpty) {
-        oIter.map(custkey => (orderkey, custkey))
+        val m = lIter.size
+        for { _ <- 1 to m
+        custkey <- oIter
+        } yield (orderkey, custkey)
       } else {
         Seq.empty[(Long, Long)]
       }
@@ -249,14 +251,16 @@ object Q4 {
 
         if (shipdate == date) Some((l_orderkey, 1)) else None
       }
-      .distinct()
 
     // "Lineitem and orders wont fit in memory" -> joint with reduce-side using cogroup
     val joined = lineitemByOrder.cogroup(ordersByOrder)
 
     val custByOrder = joined.flatMap { case (orderkey, (liIter, oIter)) =>
       if (liIter.nonEmpty && oIter.nonEmpty) {
-        oIter.map(custkey => (orderkey, custkey))
+        val m = liIter.size
+        for { _ <- 1 to m
+        custkey <- oIter
+        } yield (orderkey, custkey)
       } else {
         Seq.empty[(Long, Long)]
       }
